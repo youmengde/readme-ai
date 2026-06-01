@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import pathspec
 
-# Common patterns to ignore
 DEFAULT_IGNORE = """
 .git
 .gitignore
@@ -18,6 +18,7 @@ node_modules
 .venv
 venv
 .env
+.env.*
 dist
 build
 *.egg-info
@@ -29,6 +30,7 @@ build
 .tox
 .mypy_cache
 .pytest_cache
+.ruff_cache
 coverage
 htmlcov
 """
@@ -74,24 +76,30 @@ DEP_FILES = {
 }
 
 
-def _load_gitignore(repo_path: Path) -> pathspec.PathSpec | None:
-    """Load .gitignore patterns."""
-    gitignore = repo_path / ".gitignore"
-    if not gitignore.exists():
-        return None
-    with open(gitignore) as f:
-        return pathspec.PathSpec.from_lines("gitwildmatch", f)
-
-
 def _build_spec(repo_path: Path) -> pathspec.PathSpec:
     """Build a combined ignore spec from defaults and .gitignore."""
     lines = DEFAULT_IGNORE.strip().splitlines()
-    gitignore_spec = _load_gitignore(repo_path)
-    spec = pathspec.PathSpec.from_lines("gitwildmatch", lines)
-    if gitignore_spec:
-        # Merge: if either spec matches, ignore
-        return spec
-    return spec
+    gitignore = repo_path / ".gitignore"
+    if gitignore.exists():
+        lines.extend(gitignore.read_text(errors="ignore").splitlines())
+    return pathspec.PathSpec.from_lines("gitignore", lines)
+
+
+def _read_description(repo_path: Path, dep_file: str) -> str:
+    fpath = repo_path / dep_file
+    if not fpath.exists():
+        return ""
+    try:
+        content = fpath.read_text(errors="ignore")
+        if dep_file.endswith("pyproject.toml"):
+            for line in content.splitlines():
+                if line.strip().startswith("description"):
+                    return line.split("=", 1)[-1].strip().strip('"').strip("'")
+        if dep_file.endswith("package.json"):
+            return json.loads(content).get("description", "")
+    except Exception:
+        return ""
+    return ""
 
 
 def analyze_repo(repo_path: str | Path) -> RepoInfo:
@@ -100,11 +108,9 @@ def analyze_repo(repo_path: str | Path) -> RepoInfo:
     if not repo_path.is_dir():
         raise ValueError(f"Not a directory: {repo_path}")
 
-    info = RepoInfo()
-    info.name = repo_path.name
+    info = RepoInfo(name=repo_path.name)
     spec = _build_spec(repo_path)
 
-    # Walk the repo
     lang_counts: dict[str, int] = {}
     all_files: list[str] = []
     tree_lines: list[str] = []
@@ -112,10 +118,13 @@ def analyze_repo(repo_path: str | Path) -> RepoInfo:
     max_files = 500
 
     for root, dirs, files in os.walk(repo_path):
+        if len(all_files) >= max_files:
+            dirs[:] = []
+            break
+
         rel_root = Path(root).relative_to(repo_path)
         depth = len(rel_root.parts)
 
-        # Filter dirs
         dirs[:] = [d for d in dirs if not spec.match_file(str(rel_root / d))]
         dirs.sort()
 
@@ -138,47 +147,40 @@ def analyze_repo(repo_path: str | Path) -> RepoInfo:
                 lang = LANG_EXTENSIONS[ext]
                 lang_counts[lang] = lang_counts.get(lang, 0) + 1
 
-            if fname in ENTRY_FILES:
+            if fname in ENTRY_FILES or rel_file in ENTRY_FILES:
                 info.entry_points.append(rel_file)
 
             if fname in DEP_FILES:
                 info.dependencies.append(rel_file)
 
             if len(all_files) >= max_files:
+                dirs[:] = []
                 break
 
-    # Determine attributes
     info.languages = dict(sorted(lang_counts.items(), key=lambda x: -x[1]))
     info.top_files = all_files[:50]
     info.dir_tree = "\n".join(tree_lines[:80])
-    info.has_tests = any("test" in f.lower() for f in all_files)
-    info.has_ci = any(f.startswith(".github/workflows") or f == ".travis.yml" or f == "Jenkinsfile" for f in all_files)
+    info.has_tests = any(Path(f).parts[0] in {"test", "tests"} or Path(f).name.startswith("test_") for f in all_files)
+    info.has_ci = any(
+        f.startswith(".github/workflows") or f in {".travis.yml", "Jenkinsfile", ".gitlab-ci.yml"}
+        for f in all_files
+    )
     info.has_license = any(Path(f).name.startswith("LICENSE") for f in all_files)
-    info.has_docker = any("Dockerfile" in f or "docker-compose" in f for f in all_files)
+    info.has_docker = any(Path(f).name == "Dockerfile" or "docker-compose" in Path(f).name for f in all_files)
     info.readme_exists = any(Path(f).name.upper().startswith("README") for f in all_files)
 
-    # Try to extract description from pyproject.toml or package.json
     for dep_file in info.dependencies:
-        fpath = repo_path / dep_file
-        if not fpath.exists():
-            continue
-        try:
-            content = fpath.read_text(errors="ignore")
-            if "pyproject.toml" in dep_file:
-                for line in content.splitlines():
-                    if line.strip().startswith("description"):
-                        desc = line.split("=", 1)[-1].strip().strip('"').strip("'")
-                        if desc:
-                            info.description = desc
-                        break
-            elif "package.json" in dep_file:
-                import json
-                data = json.loads(content)
-                info.description = data.get("description", "")
-        except Exception:
-            pass
+        desc = _read_description(repo_path, dep_file)
+        if desc:
+            info.description = desc
+            break
 
     return info
+
+
+def repo_info_to_dict(info: RepoInfo) -> dict:
+    """Convert RepoInfo to a JSON-serializable dictionary."""
+    return asdict(info)
 
 
 def build_context(info: RepoInfo, repo_path: str | Path) -> str:
@@ -199,7 +201,6 @@ def build_context(info: RepoInfo, repo_path: str | Path) -> str:
         info.dir_tree,
     ]
 
-    # Read key files for more context
     for ep in info.entry_points[:3]:
         fpath = repo_path / ep
         if fpath.exists():
@@ -209,7 +210,6 @@ def build_context(info: RepoInfo, repo_path: str | Path) -> str:
             except Exception:
                 pass
 
-    # Read pyproject.toml or package.json for deps
     for dep in info.dependencies[:2]:
         fpath = repo_path / dep
         if fpath.exists():

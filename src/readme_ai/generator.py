@@ -10,25 +10,31 @@ SYSTEM_PROMPT = """You are an expert technical writer who generates high-quality
 Generate a complete, well-structured README.md in Markdown. Follow these rules:
 
 1. Start with a clear project name as H1 and a one-line description
-2. Add badge placeholders (PyPI version, license, etc.) where appropriate
-3. Include these sections as relevant:
-   - Features (bullet list)
-   - Installation (with code blocks)
-   - Usage (with realistic examples and code blocks)
-   - Configuration / Options (if applicable)
-   - Development (how to set up dev environment)
-   - License
-4. Use realistic example commands and output based on the repo's actual structure
-5. Keep it concise — no filler, no buzzwords
-6. Use proper Markdown formatting: code blocks with language tags, tables where appropriate
-7. Do NOT include placeholder text like "Add description here" — write actual content
-8. If the project has tests, CI, or Docker, mention them
-9. Output ONLY the README content, no explanations outside the Markdown
+2. Include sections that are relevant to the detected project
+3. Use realistic installation and usage examples based on the repo structure
+4. Keep it concise — no filler, no buzzwords
+5. Use proper Markdown formatting with fenced code blocks
+6. Do not include placeholder text
+7. Output only README Markdown, no explanations outside the Markdown
 """
 
-USER_PROMPT_TEMPLATE = """Generate a README.md for this repository:
+STYLE_GUIDE = {
+    "minimal": "Style: minimal. Keep the README short with only overview, install, usage, and license.",
+    "standard": "Style: standard. Include features, install, usage, development, and license when relevant.",
+    "detailed": "Style: detailed. Include project structure, configuration, development, and testing when relevant.",
+}
+
+USER_PROMPT_TEMPLATE = """Generate a README.md for this repository.
+
+{style_guide}
+
+Repository context:
 
 {context}"""
+
+
+class GenerationError(RuntimeError):
+    """Raised when an LLM provider fails to generate a README."""
 
 
 def generate_readme(
@@ -37,24 +43,24 @@ def generate_readme(
     style: str = "standard",
     model: str | None = None,
     api_key: str | None = None,
+    provider: str | None = None,
 ) -> str:
-    """Generate a README using an LLM.
-
-    Supports OpenAI and Anthropic backends.
-    """
+    """Generate a README using an LLM."""
     context = build_context(info, repo_path)
-
-    # Determine provider
-    provider = _detect_provider(model, api_key)
+    provider = _detect_provider(provider, model)
+    prompt = USER_PROMPT_TEMPLATE.format(
+        style_guide=STYLE_GUIDE.get(style, STYLE_GUIDE["standard"]),
+        context=context,
+    )
 
     if provider == "anthropic":
-        return _generate_anthropic(context, model or "claude-sonnet-4-20250514", api_key)
-    else:
-        return _generate_openai(context, model or "gpt-4o", api_key)
+        return _generate_anthropic(prompt, model or "claude-sonnet-4-20250514", api_key)
+    return _generate_openai(prompt, model or "gpt-4o", api_key)
 
 
-def _detect_provider(model: str | None, api_key: str | None) -> str:
-    """Detect which LLM provider to use."""
+def _detect_provider(provider: str | None, model: str | None) -> str:
+    if provider and provider != "auto":
+        return provider
     if model and model.startswith("claude"):
         return "anthropic"
     if os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
@@ -62,115 +68,119 @@ def _detect_provider(model: str | None, api_key: str | None) -> str:
     return "openai"
 
 
-def _generate_openai(context: str, model: str, api_key: str | None) -> str:
+def _generate_openai(prompt: str, model: str, api_key: str | None) -> str:
     """Generate using OpenAI API."""
-    from openai import OpenAI
+    try:
+        from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_PROMPT_TEMPLATE.format(context=context)},
-        ],
-        temperature=0.4,
-        max_tokens=4096,
-    )
-    return response.choices[0].message.content or ""
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
+            max_tokens=4096,
+        )
+        return response.choices[0].message.content or ""
+    except Exception as exc:
+        raise GenerationError(f"OpenAI generation failed: {exc}") from exc
 
 
-def _generate_anthropic(context: str, model: str, api_key: str | None) -> str:
+def _generate_anthropic(prompt: str, model: str, api_key: str | None) -> str:
     """Generate using Anthropic API."""
     try:
         import anthropic
-    except ImportError:
-        raise ImportError("Install anthropic package: pip install readme-ai[anthropic]")
 
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": USER_PROMPT_TEMPLATE.format(context=context)},
-        ],
-    )
-    return response.content[0].text
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+    except ImportError as exc:
+        raise GenerationError("Install Anthropic support with: pip install 'readme-ai[anthropic]'") from exc
+    except Exception as exc:
+        raise GenerationError(f"Anthropic generation failed: {exc}") from exc
+
+
+def _install_commands(info: RepoInfo) -> list[str]:
+    if any(dep.endswith("pyproject.toml") or dep.endswith("setup.py") for dep in info.dependencies):
+        return ["python3 -m pip install -e ."]
+    if any(dep.endswith("requirements.txt") for dep in info.dependencies):
+        return ["python3 -m pip install -r requirements.txt"]
+    if any(dep.endswith("package.json") for dep in info.dependencies):
+        return ["npm install"]
+    if any(dep.endswith("go.mod") for dep in info.dependencies):
+        return ["go mod download"]
+    if any(dep.endswith("Cargo.toml") for dep in info.dependencies):
+        return ["cargo build"]
+    return []
 
 
 def generate_readme_local(info: RepoInfo, repo_path: str, style: str = "standard") -> str:
-    """Generate a basic README without an LLM (fallback/template mode)."""
+    """Generate a useful README without an LLM."""
+    languages = ", ".join(list(info.languages.keys())[:3]) or "software"
     lines = [
         f"# {info.name}",
         "",
-        info.description or "A software project.",
-        "",
-        "## Features",
+        info.description or f"A {languages} project.",
         "",
     ]
 
-    # Add features based on what we detected
-    if info.has_tests:
-        lines.append("- Tested codebase")
-    if info.has_ci:
-        lines.append("- CI/CD pipeline")
-    if info.has_docker:
-        lines.append("- Docker support")
-    if info.has_license:
-        lines.append("- Open source license")
+    if style != "minimal":
+        lines.extend(["## Features", ""])
+        features = []
+        if info.entry_points:
+            features.append("Detectable application entry points")
+        if info.has_tests:
+            features.append("Test suite included")
+        if info.has_ci:
+            features.append("Continuous integration configured")
+        if info.has_docker:
+            features.append("Docker support")
+        if info.has_license:
+            features.append("Open source license")
+        features.append(f"Written primarily in {languages}")
+        lines.extend(f"- {feature}" for feature in features)
+        lines.append("")
 
     lines.extend([
-        f"- Written in {', '.join(list(info.languages.keys())[:3])}",
-        "",
         "## Installation",
         "",
         "```bash",
         f"git clone https://github.com/user/{info.name}.git",
         f"cd {info.name}",
-        "```",
-        "",
     ])
+    lines.extend(_install_commands(info))
+    lines.extend(["```", ""])
 
-    if info.dependencies:
-        dep = info.dependencies[0]
-        if "requirements.txt" in dep:
-            lines.extend([
-                "```bash",
-                "pip install -r requirements.txt",
-                "```",
-                "",
-            ])
-        elif "package.json" in dep:
-            lines.extend([
-                "```bash",
-                "npm install",
-                "```",
-                "",
-            ])
+    lines.extend(["## Usage", ""])
+    if info.entry_points:
+        lines.append("Entry points detected:")
+        lines.append("")
+        lines.extend(f"- `{entry}`" for entry in info.entry_points[:5])
+        lines.append("")
+        lines.extend(["```bash", "# Run the relevant entry point for your project", "```", ""])
+    else:
+        lines.extend(["```bash", "# Add usage examples for this project", "```", ""])
 
-    lines.extend([
-        "## Usage",
-        "",
-        "See documentation for usage details.",
-        "",
-    ])
-
-    if info.has_tests:
+    if style in {"standard", "detailed"} and info.has_tests:
         lines.extend([
             "## Development",
             "",
             "```bash",
-            "pip install -e .",
-            "pytest",
+            *(_install_commands(info) or ["# Install project dependencies"]),
+            "python3 -m pytest",
             "```",
             "",
         ])
 
-    lines.extend([
-        "## License",
-        "",
-        "MIT" if info.has_license else "See LICENSE file.",
-        "",
-    ])
+    if style == "detailed":
+        lines.extend(["## Project Structure", "", "```text", info.dir_tree, "```", ""])
 
+    lines.extend(["## License", "", "MIT" if info.has_license else "See the repository license.", ""])
     return "\n".join(lines)
