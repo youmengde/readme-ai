@@ -51,6 +51,10 @@ class RepoInfo:
     dependencies: list[str] = field(default_factory=list)
     entry_points: list[str] = field(default_factory=list)
     readme_exists: bool = False
+    # Python-specific metadata
+    python_requires: str = ""
+    python_deps: list[str] = field(default_factory=list)
+    console_scripts: list[str] = field(default_factory=list)
 
 
 LANG_EXTENSIONS = {
@@ -100,6 +104,156 @@ def _read_description(repo_path: Path, dep_file: str) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _parse_pyproject_toml(content: str) -> dict:
+    """Lightweight pyproject.toml parser — no toml dependency needed."""
+    result: dict = {"deps": [], "scripts": [], "requires": "", "description": ""}
+    in_project = False
+    in_scripts = False
+    in_deps = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        if stripped == "[project]":
+            in_project = True
+            in_scripts = False
+            in_deps = False
+            continue
+        if stripped.startswith("["):
+            if stripped in ("[project.scripts]", "[tool.poetry.scripts]"):
+                in_scripts = True
+                in_deps = False
+                continue
+            in_project = False
+            in_scripts = False
+            in_deps = False
+            continue
+
+        if in_project:
+            if stripped.startswith("description"):
+                result["description"] = stripped.split("=", 1)[-1].strip().strip('"').strip("'")
+            elif stripped.startswith("requires-python"):
+                result["requires"] = stripped.split("=", 1)[-1].strip().strip('"').strip("'")
+            elif stripped.startswith("dependencies"):
+                in_deps = True
+                continue
+
+        if in_deps:
+            if stripped.startswith("]") or (not stripped.startswith("-") and not stripped.startswith('"') and "=" not in stripped and stripped):
+                in_deps = False
+                continue
+            dep = stripped.lstrip("- ").strip('",').strip()
+            if dep:
+                result["deps"].append(dep)
+
+        if in_scripts:
+            if stripped.startswith("]") or (not stripped and not line.startswith(" ")):
+                in_scripts = False
+                continue
+            if "=" in stripped:
+                name = stripped.split("=", 1)[0].strip().strip('"')
+                if name:
+                    result["scripts"].append(name)
+
+    return result
+
+
+def _parse_setup_cfg(content: str) -> dict:
+    """Lightweight setup.cfg parser for console_scripts and install_requires."""
+    result: dict = {"deps": [], "scripts": []}
+    in_scripts = False
+    in_deps = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        if stripped.lower() == "[options.entry_points]":
+            in_scripts = False
+            in_deps = False
+            # next section header or console_scripts line
+            continue
+
+        if stripped.lower().startswith("console_scripts"):
+            in_scripts = True
+            in_deps = False
+            # the actual definitions may follow on next lines
+            if "=" in stripped:
+                _, rest = stripped.split("=", 1)
+                rest = rest.strip()
+                if rest:
+                    # inline: console_scripts = foo = module:main
+                    for entry in rest.split("\n"):
+                        name = entry.split("=")[0].strip().strip('"')
+                        if name:
+                            result["scripts"].append(name)
+            continue
+
+        if stripped.lower() == "[options]" or stripped.lower().startswith("install_requires"):
+            in_deps = stripped.lower().startswith("install_requires") or in_deps
+            in_scripts = False
+            continue
+
+        if stripped.startswith("[") and stripped != "[options.entry_points]":
+            in_scripts = False
+            in_deps = False
+            continue
+
+        if in_scripts and "=" in stripped:
+            name = stripped.split("=")[0].strip().strip('"')
+            if name:
+                result["scripts"].append(name)
+
+        if in_deps:
+            dep = stripped.strip()
+            if dep and not dep.startswith("["):
+                result["deps"].append(dep)
+
+    return result
+
+
+def _extract_python_metadata(repo_path: Path, info: RepoInfo) -> None:
+    """Enrich RepoInfo with Python-specific metadata from pyproject.toml / setup.cfg."""
+    pyproject = repo_path / "pyproject.toml"
+    setup_cfg = repo_path / "setup.cfg"
+    setup_py = repo_path / "setup.py"
+
+    if pyproject.exists():
+        try:
+            parsed = _parse_pyproject_toml(pyproject.read_text(errors="ignore"))
+            info.python_requires = parsed["requires"]
+            info.python_deps = parsed["deps"]
+            info.console_scripts = parsed["scripts"]
+            if parsed["description"] and not info.description:
+                info.description = parsed["description"]
+        except Exception:
+            pass
+
+    if setup_cfg.exists():
+        try:
+            parsed = _parse_setup_cfg(setup_cfg.read_text(errors="ignore"))
+            if parsed["scripts"] and not info.console_scripts:
+                info.console_scripts = parsed["scripts"]
+            if parsed["deps"] and not info.python_deps:
+                info.python_deps = parsed["deps"]
+        except Exception:
+            pass
+
+    # Also try setup.py for console_scripts if nothing found yet
+    if setup_py.exists() and not info.console_scripts:
+        try:
+            content = setup_py.read_text(errors="ignore")
+            for line in content.splitlines():
+                if "console_scripts" in line:
+                    # crude extraction from e.g. 'console_scripts=["foo=module:main"]'
+                    for part in line.split("="):
+                        part = part.strip().strip(" '\"[")
+                        if part and "." not in part and ":" not in part and part != "console_scripts":
+                            info.console_scripts.append(part)
+                            break
+        except Exception:
+            pass
 
 
 def analyze_repo(repo_path: str | Path) -> RepoInfo:
@@ -175,6 +329,9 @@ def analyze_repo(repo_path: str | Path) -> RepoInfo:
             info.description = desc
             break
 
+    if "Python" in info.languages:
+        _extract_python_metadata(repo_path, info)
+
     return info
 
 
@@ -196,6 +353,9 @@ def build_context(info: RepoInfo, repo_path: str | Path) -> str:
         f"Has license: {info.has_license}",
         f"Entry points: {', '.join(info.entry_points[:5]) or 'N/A'}",
         f"Dependency files: {', '.join(info.dependencies[:5]) or 'N/A'}",
+        f"Python requires: {info.python_requires or 'N/A'}",
+        f"Python dependencies: {', '.join(info.python_deps[:10]) or 'N/A'}",
+        f"Console scripts: {', '.join(info.console_scripts[:5]) or 'N/A'}",
         "",
         "Directory structure:",
         info.dir_tree,

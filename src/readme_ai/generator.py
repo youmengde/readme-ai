@@ -151,15 +151,22 @@ def generate_readme_local(info: RepoInfo, repo_path: str, style: str = "standard
     lines.extend([
         "## Installation",
         "",
-        "```bash",
-        f"git clone https://github.com/user/{info.name}.git",
-        f"cd {info.name}",
     ])
+    if info.python_requires:
+        lines.append(f"Requires Python {info.python_requires}")
+        lines.append("")
+    lines.extend(["```bash", f"git clone https://github.com/user/{info.name}.git", f"cd {info.name}"])
     lines.extend(_install_commands(info))
     lines.extend(["```", ""])
 
     lines.extend(["## Usage", ""])
-    if info.entry_points:
+    if info.console_scripts:
+        lines.append("After installation, the following commands are available:")
+        lines.append("")
+        lines.extend(f"- `{script}`" for script in info.console_scripts[:5])
+        lines.append("")
+        lines.extend(["```bash", f"{info.console_scripts[0]} --help", "```", ""])
+    elif info.entry_points:
         lines.append("Entry points detected:")
         lines.append("")
         lines.extend(f"- `{entry}`" for entry in info.entry_points[:5])
