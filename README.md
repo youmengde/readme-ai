@@ -15,6 +15,7 @@ AI-powered README generator — analyze a repository and generate a practical RE
 - `minimal`, `standard`, and `detailed` README styles
 - JSON output for repository analysis
 - Safe output behavior: existing files require `--force` to overwrite
+- `--diff` and `--check` modes for previewing changes and CI integration
 - `.gitignore` aware scanning
 
 ## Install
@@ -72,6 +73,20 @@ Existing files are not overwritten unless you pass `--force`:
 
 ```bash
 readme-ai generate . --local --output README.md --force
+```
+
+### Preview changes or check README freshness
+
+`--diff` shows what would change without writing the file. `--check` exits
+non-zero if the existing README does not match the generated content, which
+is convenient for CI:
+
+```bash
+# Preview the diff between the current README and what would be generated
+readme-ai generate . --local --output README.md --diff
+
+# In CI: fail the build when README is out of date
+readme-ai generate . --local --output README.md --check
 ```
 
 ## Privacy

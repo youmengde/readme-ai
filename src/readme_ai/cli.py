@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .analyzer import analyze_repo, repo_info_to_dict
+from .differ import is_in_sync, read_existing, render_diff
 from .generator import GenerationError, generate_readme, generate_readme_local
 
 console = Console()
@@ -57,6 +58,8 @@ def _write_output(path: str, content: str, force: bool):
 @click.option("--dry-run", is_flag=True, help="Show repo analysis without generating README")
 @click.option("--force", is_flag=True, help="Overwrite output file if it exists")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip AI privacy confirmation")
+@click.option("--diff", "show_diff", is_flag=True, help="Show diff against existing --output file instead of writing")
+@click.option("--check", is_flag=True, help="Exit non-zero if generated README differs from existing --output file")
 def generate(
     repo_path: str,
     model: str | None,
@@ -68,6 +71,8 @@ def generate(
     dry_run: bool,
     force: bool,
     assume_yes: bool,
+    show_diff: bool,
+    check: bool,
 ):
     """Generate a README for a repository.
 
@@ -75,7 +80,11 @@ def generate(
     $ readme-ai generate /path/to/repo
     $ readme-ai generate . --local
     $ readme-ai generate . --output README.md --force
+    $ readme-ai generate . --local --output README.md --diff
+    $ readme-ai generate . --local --output README.md --check
     """
+    if (show_diff or check) and not output:
+        raise click.ClickException("--diff and --check require --output to point at the existing README path.")
     try:
         with console.status("Analyzing repository..."):
             info = analyze_repo(repo_path)
@@ -111,6 +120,25 @@ def generate(
                 )
         except GenerationError as exc:
             raise click.ClickException(str(exc)) from exc
+
+    if check or show_diff:
+        existing = read_existing(output)
+        if check:
+            if is_in_sync(existing, content):
+                console.print(f"[green]{output} is up to date.[/green]")
+                return
+            console.print(f"[red]{output} is out of date.[/red]")
+            diff = render_diff(existing, content, existing_label=output, generated_label=f"{output} (generated)")
+            if diff:
+                click.echo(diff)
+            raise click.exceptions.Exit(1)
+        # show_diff
+        diff = render_diff(existing, content, existing_label=output, generated_label=f"{output} (generated)")
+        if not diff:
+            console.print(f"[green]{output} matches the generated content. No changes.[/green]")
+        else:
+            click.echo(diff)
+        return
 
     if output:
         _write_output(output, content, force=force)
