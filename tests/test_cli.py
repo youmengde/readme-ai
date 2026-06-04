@@ -112,3 +112,15 @@ def test_generate_diff_requires_output(tmp_path):
 
     assert result.exit_code != 0
     assert "--output" in result.output
+
+
+def test_generate_with_custom_template(tmp_path):
+    make_repo(tmp_path)
+    template = tmp_path / "my_template.md"
+    template.write_text("# $name\n\n$description\n", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["generate", str(tmp_path), "--template", str(template)])
+
+    assert result.exit_code == 0
+    assert "# " in result.output
+    assert "Demo project" in result.output

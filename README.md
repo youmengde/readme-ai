@@ -16,6 +16,7 @@ AI-powered README generator — analyze a repository and generate a practical RE
 - JSON output for repository analysis
 - Safe output behavior: existing files require `--force` to overwrite
 - `--diff` and `--check` modes for previewing changes and CI integration
+- Custom template support with `--template` (`$variable` syntax, zero dependencies)
 - `.gitignore` aware scanning
 
 ## Install
@@ -87,6 +88,33 @@ readme-ai generate . --local --output README.md --diff
 
 # In CI: fail the build when README is out of date
 readme-ai generate . --local --output README.md --check
+```
+
+### Use a custom template
+
+Provide a template file with `$variable` placeholders. Available variables:
+`name`, `description`, `languages`, `has_tests`, `has_ci`, `has_license`,
+`has_docker`, `entry_points`, `dependencies`, `console_scripts`,
+`python_requires`, `python_deps`, `dir_tree`.
+
+```bash
+readme-ai generate . --template my_template.md
+```
+
+Example template:
+
+```markdown
+# $name
+
+$description
+
+Built with $languages.
+
+## Install
+
+\`\`\`bash
+pip install $name
+\`\`\`
 ```
 
 ## Privacy

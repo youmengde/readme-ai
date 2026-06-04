@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added custom template support with `--template` flag (`$variable` syntax, zero extra dependencies).
 - Added `--diff` and `--check` modes for previewing changes and CI integration.
 - Improved Python metadata extraction: `requires-python`, dependencies, and console scripts from `pyproject.toml` and `setup.cfg`.
 - Added safer output handling with `--force`.

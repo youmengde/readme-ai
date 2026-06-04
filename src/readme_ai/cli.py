@@ -13,6 +13,7 @@ from rich.panel import Panel
 from .analyzer import analyze_repo, repo_info_to_dict
 from .differ import is_in_sync, read_existing, render_diff
 from .generator import GenerationError, generate_readme, generate_readme_local
+from .templater import render_custom
 
 console = Console()
 
@@ -60,6 +61,7 @@ def _write_output(path: str, content: str, force: bool):
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip AI privacy confirmation")
 @click.option("--diff", "show_diff", is_flag=True, help="Show diff against existing --output file instead of writing")
 @click.option("--check", is_flag=True, help="Exit non-zero if generated README differs from existing --output file")
+@click.option("--template", "-t", type=click.Path(exists=True), default=None, help="Custom template file ($variable syntax)")
 def generate(
     repo_path: str,
     model: str | None,
@@ -73,6 +75,7 @@ def generate(
     assume_yes: bool,
     show_diff: bool,
     check: bool,
+    template: str | None,
 ):
     """Generate a README for a repository.
 
@@ -82,6 +85,7 @@ def generate(
     $ readme-ai generate . --output README.md --force
     $ readme-ai generate . --local --output README.md --diff
     $ readme-ai generate . --local --output README.md --check
+    $ readme-ai generate . --local --template my_template.md
     """
     if (show_diff or check) and not output:
         raise click.ClickException("--diff and --check require --output to point at the existing README path.")
@@ -98,7 +102,13 @@ def generate(
         return
 
     has_key = api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    if use_local or not has_key:
+    if template:
+        try:
+            with console.status("Rendering custom template..."):
+                content = render_custom(template, info)
+        except FileNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+    elif use_local or not has_key:
         if not use_local:
             console.print("[yellow]No API key found. Using template mode (--local).[/yellow]")
         content = generate_readme_local(info, repo_path, style=style)
