@@ -88,3 +88,58 @@ def test_python_metadata_from_setup_cfg(tmp_path):
     info = analyze_repo(tmp_path)
 
     assert "oldtool" in info.console_scripts
+
+
+def test_node_metadata_from_package_json(tmp_path):
+    pkg = {
+        "name": "my-cli",
+        "description": "A nifty CLI",
+        "engines": {"node": ">=18"},
+        "dependencies": {"chalk": "^5.0.0", "commander": "^11.0.0"},
+        "devDependencies": {"vitest": "^1.0.0"},
+        "scripts": {"build": "tsc", "test": "vitest"},
+        "bin": {"my-cli": "./bin/cli.js", "my-cli-alt": "./bin/alt.js"},
+    }
+    (tmp_path / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+    (tmp_path / "index.js").write_text("console.log('hi')\n", encoding="utf-8")
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+
+    info = analyze_repo(tmp_path)
+
+    assert info.description == "A nifty CLI"
+    assert info.node_version == ">=18"
+    assert "chalk" in info.node_deps
+    assert "commander" in info.node_deps
+    assert "vitest" in info.node_dev_deps
+    assert "build" in info.node_scripts
+    assert "test" in info.node_scripts
+    assert "my-cli" in info.node_bin
+    assert info.node_pm == "npm"
+
+
+def test_node_package_manager_detection(tmp_path):
+    (tmp_path / "package.json").write_text('{"name":"x"}', encoding="utf-8")
+    (tmp_path / "index.js").write_text("\n", encoding="utf-8")
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: 6.0\n", encoding="utf-8")
+
+    info = analyze_repo(tmp_path)
+    assert info.node_pm == "pnpm"
+
+
+def test_node_bin_string_form(tmp_path):
+    pkg = {"name": "single-bin", "bin": "./cli.js"}
+    (tmp_path / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+    (tmp_path / "index.js").write_text("\n", encoding="utf-8")
+
+    info = analyze_repo(tmp_path)
+    assert info.node_bin == ["single-bin"]
+
+
+def test_node_metadata_not_populated_without_package_json(tmp_path):
+    (tmp_path / "main.py").write_text("print('hi')\n", encoding="utf-8")
+
+    info = analyze_repo(tmp_path)
+
+    assert info.node_deps == []
+    assert info.node_version == ""
+    assert info.node_pm == ""

@@ -55,6 +55,13 @@ class RepoInfo:
     python_requires: str = ""
     python_deps: list[str] = field(default_factory=list)
     console_scripts: list[str] = field(default_factory=list)
+    # Node.js-specific metadata
+    node_version: str = ""
+    node_deps: list[str] = field(default_factory=list)
+    node_dev_deps: list[str] = field(default_factory=list)
+    node_scripts: list[str] = field(default_factory=list)
+    node_bin: list[str] = field(default_factory=list)
+    node_pm: str = ""
 
 
 LANG_EXTENSIONS = {
@@ -256,6 +263,67 @@ def _extract_python_metadata(repo_path: Path, info: RepoInfo) -> None:
             pass
 
 
+NODE_LOCKFILES = {
+    "package-lock.json": "npm",
+    "yarn.lock": "yarn",
+    "pnpm-lock.yaml": "pnpm",
+    "bun.lockb": "bun",
+    "bun.lock": "bun",
+}
+
+
+def _detect_node_package_manager(repo_path: Path) -> str:
+    """Detect the package manager from lockfile presence."""
+    for lockfile, pm in NODE_LOCKFILES.items():
+        if (repo_path / lockfile).exists():
+            return pm
+    return ""
+
+
+def _extract_node_metadata(repo_path: Path, info: RepoInfo) -> None:
+    """Enrich RepoInfo with Node.js metadata from package.json."""
+    pkg = repo_path / "package.json"
+    if not pkg.exists():
+        return
+
+    try:
+        data = json.loads(pkg.read_text(errors="ignore"))
+    except Exception:
+        return
+
+    if not isinstance(data, dict):
+        return
+
+    engines = data.get("engines")
+    if isinstance(engines, dict) and isinstance(engines.get("node"), str):
+        info.node_version = engines["node"]
+
+    deps = data.get("dependencies")
+    if isinstance(deps, dict):
+        info.node_deps = sorted(deps.keys())
+
+    dev_deps = data.get("devDependencies")
+    if isinstance(dev_deps, dict):
+        info.node_dev_deps = sorted(dev_deps.keys())
+
+    scripts = data.get("scripts")
+    if isinstance(scripts, dict):
+        info.node_scripts = sorted(scripts.keys())
+
+    bin_field = data.get("bin")
+    if isinstance(bin_field, str):
+        info.node_bin = [data.get("name", "")] if data.get("name") else []
+    elif isinstance(bin_field, dict):
+        info.node_bin = sorted(bin_field.keys())
+
+    info.node_pm = _detect_node_package_manager(repo_path)
+
+    if not info.description:
+        desc = data.get("description")
+        if isinstance(desc, str) and desc:
+            info.description = desc
+
+
 def analyze_repo(repo_path: str | Path) -> RepoInfo:
     """Analyze a repository and extract metadata."""
     repo_path = Path(repo_path).resolve()
@@ -332,6 +400,9 @@ def analyze_repo(repo_path: str | Path) -> RepoInfo:
     if "Python" in info.languages:
         _extract_python_metadata(repo_path, info)
 
+    if "JavaScript" in info.languages or "TypeScript" in info.languages or (repo_path / "package.json").exists():
+        _extract_node_metadata(repo_path, info)
+
     return info
 
 
@@ -356,6 +427,11 @@ def build_context(info: RepoInfo, repo_path: str | Path) -> str:
         f"Python requires: {info.python_requires or 'N/A'}",
         f"Python dependencies: {', '.join(info.python_deps[:10]) or 'N/A'}",
         f"Console scripts: {', '.join(info.console_scripts[:5]) or 'N/A'}",
+        f"Node engines: {info.node_version or 'N/A'}",
+        f"Node package manager: {info.node_pm or 'N/A'}",
+        f"Node dependencies: {', '.join(info.node_deps[:10]) or 'N/A'}",
+        f"Node scripts: {', '.join(info.node_scripts[:10]) or 'N/A'}",
+        f"Node bin entries: {', '.join(info.node_bin[:5]) or 'N/A'}",
         "",
         "Directory structure:",
         info.dir_tree,

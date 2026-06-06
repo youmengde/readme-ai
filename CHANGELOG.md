@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added Node.js project metadata extraction: parses `package.json` for engines/deps/scripts/bin, detects package manager from lockfile (npm/yarn/pnpm/bun), and wires it into the local README generator and custom templates (#4).
+
 ## v0.1.1 — 2026-06-06
 
 - Added custom template support with `--template` flag (`$variable` syntax, zero extra dependencies).

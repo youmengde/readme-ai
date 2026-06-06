@@ -113,7 +113,8 @@ def _install_commands(info: RepoInfo) -> list[str]:
     if any(dep.endswith("requirements.txt") for dep in info.dependencies):
         return ["python3 -m pip install -r requirements.txt"]
     if any(dep.endswith("package.json") for dep in info.dependencies):
-        return ["npm install"]
+        pm = info.node_pm or "npm"
+        return [f"{pm} install"]
     if any(dep.endswith("go.mod") for dep in info.dependencies):
         return ["go mod download"]
     if any(dep.endswith("Cargo.toml") for dep in info.dependencies):
@@ -155,6 +156,9 @@ def generate_readme_local(info: RepoInfo, repo_path: str, style: str = "standard
     if info.python_requires:
         lines.append(f"Requires Python {info.python_requires}")
         lines.append("")
+    if info.node_version:
+        lines.append(f"Requires Node.js {info.node_version}")
+        lines.append("")
     lines.extend(["```bash", f"git clone https://github.com/user/{info.name}.git", f"cd {info.name}"])
     lines.extend(_install_commands(info))
     lines.extend(["```", ""])
@@ -166,6 +170,19 @@ def generate_readme_local(info: RepoInfo, repo_path: str, style: str = "standard
         lines.extend(f"- `{script}`" for script in info.console_scripts[:5])
         lines.append("")
         lines.extend(["```bash", f"{info.console_scripts[0]} --help", "```", ""])
+    elif info.node_bin:
+        lines.append("After installation, the following CLI commands are available:")
+        lines.append("")
+        lines.extend(f"- `{name}`" for name in info.node_bin[:5])
+        lines.append("")
+        lines.extend(["```bash", f"{info.node_bin[0]} --help", "```", ""])
+    elif info.node_scripts:
+        pm = info.node_pm or "npm"
+        run_kw = "run" if pm in {"npm", "pnpm", "yarn"} else "run"
+        lines.append("Available scripts:")
+        lines.append("")
+        lines.extend(f"- `{pm} {run_kw} {s}`" for s in info.node_scripts[:5])
+        lines.append("")
     elif info.entry_points:
         lines.append("Entry points detected:")
         lines.append("")
@@ -176,12 +193,17 @@ def generate_readme_local(info: RepoInfo, repo_path: str, style: str = "standard
         lines.extend(["```bash", "# Add usage examples for this project", "```", ""])
 
     if style in {"standard", "detailed"} and info.has_tests:
+        test_cmd = "python3 -m pytest"
+        if not any(dep.endswith(("pyproject.toml", "setup.py", "requirements.txt")) for dep in info.dependencies):
+            if any(dep.endswith("package.json") for dep in info.dependencies):
+                pm = info.node_pm or "npm"
+                test_cmd = f"{pm} test"
         lines.extend([
             "## Development",
             "",
             "```bash",
             *(_install_commands(info) or ["# Install project dependencies"]),
-            "python3 -m pytest",
+            test_cmd,
             "```",
             "",
         ])

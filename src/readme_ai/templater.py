@@ -24,6 +24,9 @@ def _template_vars(info: RepoInfo) -> dict[str, str]:
     deps = ", ".join(info.dependencies[:5]) or "N/A"
     scripts = ", ".join(info.console_scripts[:5]) or "N/A"
     py_deps = ", ".join(info.python_deps[:10]) or "N/A"
+    node_deps = ", ".join(info.node_deps[:10]) or "N/A"
+    node_scripts = ", ".join(info.node_scripts[:10]) or "N/A"
+    node_bin = ", ".join(info.node_bin[:5]) or "N/A"
 
     return {
         "name": info.name,
@@ -38,6 +41,11 @@ def _template_vars(info: RepoInfo) -> dict[str, str]:
         "console_scripts": scripts,
         "python_requires": info.python_requires or "",
         "python_deps": py_deps,
+        "node_version": info.node_version or "",
+        "node_pm": info.node_pm or "",
+        "node_deps": node_deps,
+        "node_scripts": node_scripts,
+        "node_bin": node_bin,
         "dir_tree": info.dir_tree,
     }
 
@@ -48,7 +56,8 @@ def render_custom(template_path: str | Path, info: RepoInfo) -> str:
     Template syntax uses ``$variable`` or ``${variable}`` placeholders.
     Available variables: name, description, languages, has_tests, has_ci,
     has_license, has_docker, entry_points, dependencies, console_scripts,
-    python_requires, python_deps, dir_tree.
+    python_requires, python_deps, node_version, node_pm, node_deps,
+    node_scripts, node_bin, dir_tree.
     """
     tmpl = load_template(template_path)
     variables = _template_vars(info)
