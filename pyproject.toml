@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "readme-ai"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-powered README generator — analyze your repo, generate a beautiful README"
 readme = "README.md"
 license = {text = "MIT"}

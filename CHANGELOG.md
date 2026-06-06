@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.1 — 2026-06-06
 
 - Added custom template support with `--template` flag (`$variable` syntax, zero extra dependencies).
 - Added `--diff` and `--check` modes for previewing changes and CI integration.
